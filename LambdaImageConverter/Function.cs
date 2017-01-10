@@ -1,13 +1,16 @@
 using System.Collections.Generic;
 using System.Net;
-using ImageSharp;
+using System.IO;
 using System.Threading.Tasks;
+using System.Diagnostics;
 
 using Amazon.S3;
 using Amazon.S3.Model;
 using Amazon.Lambda.Core;
 using Amazon.Lambda.APIGatewayEvents;
-using System.IO;
+
+using ImageSharp;
+
 
 // Assembly attribute to enable the Lambda function's JSON input to be converted into a .NET class.
 [assembly: LambdaSerializerAttribute(typeof(Amazon.Lambda.Serialization.Json.JsonSerializer))]
@@ -17,12 +20,14 @@ namespace LambdaImageConverter
     public class Functions
     {
         private AmazonS3Client s3Client;
+        private Stopwatch globalSw;
 
         /// <summary>
         /// Default constructor that Lambda will invoke.
         /// </summary>
         public Functions()
         {
+            globalSw = Stopwatch.StartNew();
             s3Client = new AmazonS3Client();
         }
 
@@ -35,10 +40,15 @@ namespace LambdaImageConverter
         public async Task<APIGatewayProxyResponse> Get(APIGatewayProxyRequest request, ILambdaContext context)
         {
             context.Logger.LogLine("Get Request\n");
-            Image testImage = await LoadImage(context);
-            context.Logger.LogLine(testImage.ToString());
 
+            var sw = Stopwatch.StartNew();
+            Image testImage = await LoadImage(context);
+            sw.Stop(); Logging("Load image time: " + sw.Elapsed.ToString(), context);
+
+            sw.Restart();
             var resizedImage = testImage.Resize(256, 256);
+            sw.Stop(); Logging("Resize image time: " + sw.Elapsed.ToString(), context);
+
             resizedImage.SaveAsJpeg(new FileStream("/tmp/lena_resized.jpg", FileMode.Create));
 
             var putReq = new PutObjectRequest
@@ -57,20 +67,20 @@ namespace LambdaImageConverter
                 Headers = new Dictionary<string, string> { { "Content-Type", "text/plain" } }
             };
 
+            globalSw.Stop(); Logging("Total time: " + globalSw.Elapsed.ToString(), context);
             return response;
         }
 
         private async Task<Image> LoadImage(ILambdaContext context)
         {
-            context.Logger.LogLine("Downloading image from S3...");
             var obj = await s3Client.GetObjectAsync("lambda-image-converter", "lena.jpg");
-            context.Logger.LogLine("Image Download completed.");
-
-            context.Logger.LogLine("Image reading...");
             Image img = new Image(obj.ResponseStream);
-            context.Logger.LogLine("Image loaded.");
-
             return img;
+        }
+
+        private void Logging(string str, ILambdaContext context)
+        {
+            context.Logger.LogLine(str);
         }
     }
 }
